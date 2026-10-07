@@ -28,7 +28,7 @@ use std::collections::VecDeque;
 use oxideav_core::frame::VideoPlane;
 use oxideav_core::{
     CodecCapabilities, CodecId, CodecInfo, CodecParameters, CodecRegistry, CodecTag, Decoder,
-    Error as CoreError, Frame, Packet, Result, RuntimeContext, VideoFrame,
+    Error as CoreError, Frame, Packet, PixelFormat, Result, RuntimeContext, VideoFrame,
 };
 
 use crate::decode_frame::Vp6Decoder;
@@ -85,6 +85,9 @@ impl From<&Vp6Frame> for VideoFrame {
 pub struct Vp6CodecDecoder {
     codec_id: CodecId,
     pending: VecDeque<Packet>,
+    /// Luma size and pixel format of the frame `receive_frame` last
+    /// returned (frames are decoded there, so none is known before it).
+    last_output: Option<((u32, u32), Option<PixelFormat>)>,
     eof: bool,
     state: Vp6Decoder,
 }
@@ -95,6 +98,7 @@ impl Vp6CodecDecoder {
         Self {
             codec_id,
             pending: VecDeque::new(),
+            last_output: None,
             eof: false,
             state: Vp6Decoder::new(),
         }
@@ -135,9 +139,20 @@ impl Decoder for Vp6CodecDecoder {
         // after decode") so the emitted frame has the output geometry.
         // Identity for streams whose output matches the coded size.
         let decoded = self.state.decode_packet_scaled(&pkt.data)?;
+        self.last_output = Some(frame_layout(&decoded));
         let mut vf: VideoFrame = (&decoded).into();
         vf.pts = pkt.pts;
         Ok(Frame::Video(vf))
+    }
+
+    fn output_video_dimensions(&self) -> Option<(u32, u32)> {
+        self.last_output
+            .map(|(size, _)| size)
+            .filter(|&(w, h)| w > 0 && h > 0)
+    }
+
+    fn output_pixel_format(&self) -> Option<PixelFormat> {
+        self.last_output.and_then(|(_, format)| format)
     }
 
     fn flush(&mut self) -> Result<()> {
@@ -147,10 +162,22 @@ impl Decoder for Vp6CodecDecoder {
 
     fn reset(&mut self) -> Result<()> {
         self.pending.clear();
+        self.last_output = None;
         self.eof = false;
         self.state.reset();
         Ok(())
     }
+}
+
+/// The luma size and pixel format of `f` as `VideoFrame::from` packs it:
+/// `Yuv420P` when the chroma planes are the core 4:2:0 size for the luma
+/// size, else `None`.
+fn frame_layout(f: &Vp6Frame) -> ((u32, u32), Option<PixelFormat>) {
+    // §2 sizes are 8-bit macroblock counts, scaled at most 5:1 (§9).
+    let size = (f.y.width() as u32, f.y.height() as u32);
+    let chroma = (f.u.width() as u32, f.u.height() as u32);
+    let exact = PixelFormat::Yuv420P.plane_dimensions(1, size.0, size.1) == Some(chroma);
+    (size, exact.then_some(PixelFormat::Yuv420P))
 }
 
 /// `make_decoder` factory plugged into the registry.

@@ -6,6 +6,12 @@ to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Decoder::output_video_dimensions` / `output_pixel_format`: the output
+  size (after §9 scaling) of the frame `receive_frame` last returned,
+  `Yuv420P` when the chroma planes are the 4:2:0 size for it.
+
 ## [0.0.9](https://github.com/OxideAV/oxideav-vp6/compare/v0.0.8...v0.0.9) - 2026-08-23
 
 ### Fixed
